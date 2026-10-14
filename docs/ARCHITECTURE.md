@@ -2,11 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft v0.2, for review |
+| Status | v0.3, open questions answered. Ready to merge and start Phase 1. |
 | Date | 2026-10-14 |
 | Scope | Architecture only. No application code exists yet. |
-| Inputs | [`BUILD_PROMPTS.md`](../BUILD_PROMPTS.md) (phases 0 to 10). `CLAUDE.md` does not exist yet (see Q1). |
-| Change from v0.1 | Rewritten to match `BUILD_PROMPTS.md`: mobile first, passkeys, Claude and Gemini adapters, Python document worker, 11 phases. |
+| Inputs | [`BUILD_PROMPTS.md`](../BUILD_PROMPTS.md) (phases 0 to 10) and [`CLAUDE.md`](../CLAUDE.md) (non-negotiable rules and conventions). |
+| Change history | v0.3: section 8 answered, `CLAUDE.md` added. v0.2: rewritten to match `BUILD_PROMPTS.md`: mobile first, passkeys, Claude and Gemini adapters, Python document worker, 11 phases. |
 
 ---
 
@@ -34,7 +34,7 @@
 |---|---|---|
 | A1 | Users are people in India with credit and debit cards ("Demo Bank Debit Classic" suggests debit cards are in scope too). | All |
 | A2 | We **never** store full card numbers (PAN), CVV or expiry. A user's card is a link to a card product, plus an optional nickname and the last 4 digits. | 3, 5 |
-| A3 | We don't read transactions from banks, SMS or email. Spend, points balances and milestone progress come from **user-entered estimates** (see Q3). | 3, 4 |
+| A3 | Confirmed (Q3): we don't read transactions from banks, SMS or email. Spend, points balances and milestone progress come from **user-entered estimates**. | 3, 4 |
 | A4 | Cloud is AWS Mumbai (`ap-south-1`). | 1, 5 |
 | A5 | Users are 18 or older, so the DPDP children's data rules are handled by an age gate. | 5 |
 | A6 | Small team (1 to 3 engineers) plus AI-assisted development. | 2 |
@@ -554,7 +554,7 @@ ALTER TABLE benefit_rules ADD CONSTRAINT no_overlapping_published
 | `getUpcomingDeadlines(cards, rules, userState, date, horizon)` | Quota resets, points expiry, milestone and fee-waiver deadlines, renewals | Alerts worker, wallet |
 | `compareRuleVersions(oldRules, newRules, cards, spendProfile)` | Yearly value change per user (devaluation impact) | Admin impact preview, devaluation alerts |
 
-**Possibly a 6th function.** The upgrade advisor and annual review need "yearly value of card X for this spend profile". I'd add `estimateAnnualValue(card, rules, spendProfile)` and build both on top of `recommendCardForPurchase` logic, so the maths isn't duplicated (Q14).
+**A 6th function (decided, Q14).** The upgrade advisor and annual review need "yearly value of card X for this spend profile", so the engine adds `estimateAnnualValue(card, rules, spendProfile)`. It's built on the same logic as `recommendCardForPurchase`, so the maths isn't duplicated.
 
 **Output contract.** Every result includes:
 
@@ -799,7 +799,7 @@ flowchart LR
 
 | Phase | Name | Main deliverables | Exit criteria |
 |---|---|---|---|
-| 0 | Plan | This document, answers to section 8, `CLAUDE.md` | Open questions answered. Doc approved and merged. |
+| 0 | Plan | This document, answers to section 8, `CLAUDE.md` | Done in PR #1 once merged |
 | 1 | Monorepo foundation | pnpm and Turbo, `apps/*`, `workers/*`, `packages/*` (plus `packages/db`), Docker Compose, lint, format and TS strict, CI, `.env.example`, README setup, `docs/PROGRESS.md` | One command starts every app, and each shows a health check. CI green. |
 | 2 | Rules engine and data model | `packages/rules-engine` (5 functions), Drizzle schema for section 3, rule status flow, demo seed only | Engine coverage at 95% or more, table-driven tests, exclusion constraint tested, no real bank data in the seed |
 | 3 | API | Passkeys, phone verification with a mock SMS provider, device binding, risk scoring, step-up, all endpoint groups, zod, rate limits, audit log, OpenAPI, typed client in `packages/shared` | Integration test for every endpoint. Threat model written. |
@@ -815,28 +815,37 @@ After each phase, the review prompt at the end of `BUILD_PROMPTS.md` is run agai
 
 ---
 
-## 8. Open questions
+## 8. Decisions on open questions
 
-Each question has my recommended default. Reply "go with defaults" or change any.
+Q1, Q3, Q5 and Q8 were answered directly on 2026-10-14. The rest use the recommended default, since no objection was raised. Any of them can still be changed by updating this table.
 
-| # | Question | Recommended default |
-|---|---|---|
-| Q1 | `CLAUDE.md` is missing, and the review prompt checks against its "non-negotiable rules (AI, data, security)". Do you have the original text? | If not, I write it from `BUILD_PROMPTS.md` and this doc, for your approval, before Phase 1. |
-| Q2 | Who is it for first, and when? | Closed beta with about 50 invited users. No date pressure. |
-| Q3 | Deadlines, points expiry, the upgrade advisor and annual review need spend and points data. Where does it come from? | The user enters estimates: monthly spend by category, and points balance and expiry per card. Statement upload could come after beta. |
-| Q4 | The seed has demo cards only. Who enters real cards, and when? | Real cards are entered through the admin console after Phase 6, starting with 10 to 15 cards. Until then, everything runs on demo cards. |
-| Q5 | Will the upgrade advisor ever earn affiliate or referral money? | Not in v1. Rankings stay neutral. If added later, show a clear disclosure and never change the ranking for money. |
-| Q6 | Passkeys need a real domain (web origin, plus `apple-app-site-association` and `assetlinks.json` for the apps). Do you have one? | Buy one before Phase 3, for example `cardguru.in` if available. |
-| Q7 | EAS builds for real devices, App Attest and Play Integrity need an Apple Developer account (USD 99 a year) and a Google Play account (USD 25 one-time). | Get both before Phase 4. Simulators and emulators work without them until then. |
-| Q8 | Will you run the project on your own computer (needs Docker, Node and Python) or only through Claude Code cloud sessions? | Support both. The README will cover macOS and Windows (WSL). |
-| Q9 | LLM keys and budget: Claude and Gemini keys, a monthly cap, and evals in CI costing money. | Hard monthly cap in each provider console. Evals only on AI-related PRs, `main` and nightly. |
-| Q10 | Is it OK for redacted question text to be processed by LLMs hosted outside India? | Yes, redacted only, with zero-retention settings. |
-| Q11 | How long do we keep data? | Inactive accounts 2 years. Logged questions and evaluations 12 months, then anonymous totals only. T&C snapshots indefinitely (public data). |
-| Q12 | AWS Mumbai or GCP Mumbai? | AWS `ap-south-1`. |
-| Q13 | OK to add `packages/db` to the layout in `BUILD_PROMPTS.md`? | Yes (reasons in 1.2). |
-| Q14 | OK to add a 6th engine function, `estimateAnnualValue`, for the upgrade advisor and annual review? | Yes. Otherwise that maths would sit in the API, outside the tested engine. |
-| Q15 | Privacy counsel? | Not needed for a closed beta. Needed before public launch. |
-| Q16 | What does a good beta look like? | 50 active users, 70% of answers rated helpful, zero wrong amounts reported, alert open rate above 30%. |
+| # | Question | Decision | How decided |
+|---|---|---|---|
+| Q1 | `CLAUDE.md` | Written from `BUILD_PROMPTS.md` and this doc, in the same PR as v0.3 | Answered |
+| Q2 | Audience and timing | Closed beta with about 50 invited users. No fixed date. | Default |
+| Q3 | Source of spend and points data | **Users enter estimates**: monthly spend by category, and points balance and expiry per card. Labelled as estimates. No statement upload or bank data in v1. | Answered |
+| Q4 | Real card data | Demo cards only until Phase 6. Then 10 to 15 real cards entered through the admin console with sources and review. | Default |
+| Q5 | Referral or affiliate income | **None. Rankings stay neutral.** No affiliate links in v1. | Answered |
+| Q6 | Domain for passkeys | Buy one before Phase 3 | Default |
+| Q7 | Apple and Google developer accounts | Get both before Phase 4. Simulators and emulators until then. | Default |
+| Q8 | Where development happens | **Both** Claude Code cloud sessions and a local computer. The README covers macOS and Windows (WSL). | Answered |
+| Q9 | LLM keys and budget | Hard monthly cap per provider. Evals run on AI-related PRs, on `main` and nightly. | Default |
+| Q10 | LLM processing outside India | Allowed for redacted text only, with zero-retention settings | Default |
+| Q11 | Retention | Inactive accounts 2 years. Logged questions and evaluations 12 months, then anonymous totals. T&C snapshots kept. | Default |
+| Q12 | Cloud | AWS `ap-south-1` | Default |
+| Q13 | Add `packages/db` | Yes | Default |
+| Q14 | Add `estimateAnnualValue` engine function | Yes | Default |
+| Q15 | Privacy counsel | Before public launch, not needed for closed beta | Default |
+| Q16 | Beta success | 50 active users, 70% of answers rated helpful, zero wrong amounts reported, alert open rate above 30% | Default |
+
+### Things you need to arrange (not code)
+
+| When | Item |
+|---|---|
+| Before Phase 3 | A domain name (needed for passkeys) |
+| Before Phase 4 | Apple Developer account (USD 99 a year) and Google Play developer account (USD 25 one-time) |
+| Before Phase 8 | Claude and Gemini API keys, each with a monthly spending cap |
+| Before beta with real SMS | An SMS provider account with TRAI DLT registration |
 
 ---
 
@@ -847,7 +856,7 @@ Each question has my recommended default. Reply "go with defaults" or change any
 | R1 | **Scope is large**: 3 apps, 2 workers, 2 languages and advanced mobile security, for a small team | High | High | Strict phase exit criteria and the review prompt after each phase. Mobile security extras (pinning, root detection) could move to Phase 10 if Phase 4 runs long. |
 | R2 | **Stale or wrong rules** once real cards are added | High | High | "Verified on" on everything, the document worker flags changes, four-eyes publishing, and a "report this" button |
 | R3 | **AI states a wrong amount** | Medium | High | Engine-only tools, number guard, template fallback, refusal when no rule exists, CI eval gate |
-| R4 | **Features need data we don't collect** (deadlines, upgrade advisor) | High | Medium | User-entered estimates (Q3), labelled as estimates in the UI |
+| R4 | **Features need data we don't collect** (deadlines, upgrade advisor) | High | Medium | User-entered estimates (Q3, decided), labelled as estimates in the UI. Revisit statement upload after beta if accuracy complaints come in. |
 | R5 | **Passkey recovery is weak or lets attackers in.** Phone OTP alone can be beaten by SIM swap. | Medium | High | Recovery needs OTP plus a second factor or a cooling-off period. Recovery events go into the risk score. |
 | R6 | **Indian SMS rules (DLT)** delay real OTP delivery | Medium | Medium | Mock provider through Phase 9, and start DLT registration with the chosen SMS provider early |
 | R7 | **Mobile security features don't work in Expo Go** and need native config | High | Low | Use Expo development builds from the start of Phase 4 |
@@ -855,5 +864,5 @@ Each question has my recommended default. Reply "go with defaults" or change any
 | R9 | **AI eval cost and flakiness in CI** | Medium | Medium | Run only when AI paths change, fixed temperature, a threshold rather than exact matching, budget cap |
 | R10 | **Two LLM providers** double the tuning, eval and DPA work | Medium | Low | One primary provider for beta, with the second kept working through nightly evals |
 | R11 | **DPDP interpretation gaps** | Medium | High | Consent-first, minimal design, and counsel before public launch (Q15) |
-| R12 | **Users treat answers as financial advice**, especially from the upgrade advisor | Medium | Medium | Clear disclaimers, neutral rankings, disclosure if any money is involved (Q5) |
-| R13 | **No `CLAUDE.md`**, so the per-phase review has nothing to check against | High | Medium | Write it before Phase 1 (Q1) |
+| R12 | **Users treat answers as financial advice**, especially from the upgrade advisor | Medium | Medium | Clear disclaimers. Neutral rankings with no affiliate income (Q5, decided). |
+| R13 | **`CLAUDE.md` was written after the fact**, so it may miss rules you had in mind | Low | Medium | Review it in this PR. It's a living file, so add rules as they come up. |

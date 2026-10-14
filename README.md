@@ -23,8 +23,7 @@ You can also just ask a question in plain English, like *"Which card should I us
 
 | Item | Status |
 |---|---|
-| Phase 0: architecture | Draft v0.2 done, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| Open questions | Waiting for answers (section 8 of the architecture doc) |
+| Phase 0: plan | Done, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`CLAUDE.md`](CLAUDE.md) |
 | Phase 1: monorepo foundation | Not started |
 
 Progress is tracked in [`docs/PROGRESS.md`](docs/PROGRESS.md). Each phase is built from a prompt in [`BUILD_PROMPTS.md`](BUILD_PROMPTS.md).
