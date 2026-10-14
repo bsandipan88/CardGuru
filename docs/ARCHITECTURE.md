@@ -2,29 +2,42 @@
 
 | Field | Value |
 |---|---|
-| Status | Draft v0.1, for review |
+| Status | Draft v0.2, for review |
 | Date | 2026-10-14 |
 | Scope | Architecture only. No application code exists yet. |
-| Source inputs | No `CLAUDE.md` or `BUILD_PROMPTS.md` exist. This draft is built from the stated feature list and the assumptions in section 0. |
+| Inputs | [`BUILD_PROMPTS.md`](../BUILD_PROMPTS.md) (phases 0 to 10). `CLAUDE.md` does not exist yet (see Q1). |
+| Change from v0.1 | Rewritten to match `BUILD_PROMPTS.md`: mobile first, passkeys, Claude and Gemini adapters, Python document worker, 11 phases. |
 
 ---
 
-## 0. Assumptions to confirm
+## 0. Inputs and assumptions
 
-These assumptions drive the design. If any of them is wrong, the section named in the last column needs a revisit.
+### 0.1 Confirmed by BUILD_PROMPTS.md
+
+| # | Fact | Phase |
+|---|---|---|
+| C1 | Clients: Expo mobile app (iOS and Android) first, Next.js web app mirroring it, Next.js admin console for rules analysts | 1, 4, 5, 6 |
+| C2 | Login is by passkey (WebAuthn). Phone verification is used only at sign-up and as one step of recovery, through a pluggable SMS provider (mocked in dev). | 3 |
+| C3 | Device binding, session risk scoring and step-up authentication for sensitive actions | 3 |
+| C4 | The rules engine is pure TypeScript, deterministic, with no I/O, and exposes 5 named functions | 2 |
+| C5 | Benefit rules are versioned with the status flow draft, in_review, published, retired | 2 |
+| C6 | Seed data contains **only fictional demo cards**. No real bank benefits are invented. | 2 |
+| C7 | The AI layer is provider-agnostic, with Claude and Gemini adapters. The model can only call rules-engine functions and never states numbers that didn't come from a tool. | 8 |
+| C8 | A Python worker monitors bank T&C pages and proposes draft rules. **Drafts are never auto-published.** | 9 |
+| C9 | Alerts go out by push and email. WhatsApp is stubbed for later. | 7 |
+| C10 | Every benefit shows "Verified on <date>" and a source link | 4, 8 |
+| C11 | Production runs in an India cloud region, set up with Terraform | 10 |
+
+### 0.2 Still assumed (please confirm)
 
 | # | Assumption | Affects |
 |---|---|---|
-| A1 | CardGuru is a consumer app for people in India who hold one or more credit cards. It tells them which card to use for a given spend, what benefits they have, and when to act (fees, milestones, lounge quotas, trips). | All |
-| A2 | We **never** store full card numbers (PAN), CVV or expiry. A user's card is a link to a card product plus an optional nickname and the last 4 digits. | 4, 6 |
-| A3 | v1 does **not** read transactions from banks, SMS or email. Spend for milestones is either entered by the user or not tracked. | 4, 5, 9 |
-| A4 | Benefit rules are curated by an internal team from public bank T&C documents, not scraped and published automatically. | 4, 5 |
-| A5 | Clients are a responsive web app first and a mobile app later. Login is by phone OTP. | 1, 6 |
-| A6 | Stack is TypeScript end to end, in a single monorepo. | 2, 7 |
-| A7 | Hosting is on AWS in Mumbai (`ap-south-1`), with all personal data stored in India. | 1, 6 |
-| A8 | The LLM provider sits behind an interface. Default is Claude (Sonnet 5.5 for answers, Haiku 5.5 for classification). Only redacted text is sent to it. | 5, 6 |
-| A9 | Small team (1 to 3 engineers) plus AI-assisted development. Conventions and guardrails matter more than raw throughput. | 2 |
-| A10 | Users are 18+ (credit card holders), so the DPDP children's data rules are handled by an age gate, not parental consent. | 6 |
+| A1 | Users are people in India with credit and debit cards ("Demo Bank Debit Classic" suggests debit cards are in scope too). | All |
+| A2 | We **never** store full card numbers (PAN), CVV or expiry. A user's card is a link to a card product, plus an optional nickname and the last 4 digits. | 3, 5 |
+| A3 | We don't read transactions from banks, SMS or email. Spend, points balances and milestone progress come from **user-entered estimates** (see Q3). | 3, 4 |
+| A4 | Cloud is AWS Mumbai (`ap-south-1`). | 1, 5 |
+| A5 | Users are 18 or older, so the DPDP children's data rules are handled by an age gate. | 5 |
+| A6 | Small team (1 to 3 engineers) plus AI-assisted development. | 2 |
 
 ---
 
@@ -35,26 +48,34 @@ These assumptions drive the design. If any of them is wrong, the section named i
 ```mermaid
 flowchart LR
     user([Card holder])
-    ops([CardGuru ops team<br/>rule editors and approvers])
+    analyst([Rules analysts<br/>analyst, reviewer, admin])
 
     subgraph cg[CardGuru platform]
-        app[Web and mobile apps]
-        api[API]
+        mobile[Mobile app<br/>iOS and Android]
+        web[Web app]
+        admin[Admin console]
+        backend[API and workers]
     end
 
-    otp[[OTP / SMS provider]]
-    llm[[LLM provider]]
-    notify[[Email, push and WhatsApp providers]]
-    banks[[Bank T&C pages<br/>public documents]]
+    sms[[SMS provider<br/>sign-up and recovery only]]
+    llm[[LLM providers<br/>Claude, Gemini]]
+    push[[Expo push, APNs, FCM]]
+    email[[Email provider]]
+    banks[[Public bank T&C<br/>pages and PDFs]]
+    attest[[Apple App Attest,<br/>Google Play Integrity]]
+    obs[[Sentry]]
 
-    user -->|asks questions, manages cards, plans trips| app
-    app --> api
-    ops -->|authors and approves benefit rules| api
-    api -->|send OTP| otp
-    api -->|redacted prompts| llm
-    api -->|alerts| notify
-    notify -->|email, push, WhatsApp| user
-    ops -.->|reads and snapshots| banks
+    user --> mobile & web
+    analyst --> admin
+    mobile & web & admin --> backend
+    backend --> sms
+    backend --> llm
+    backend --> push & email
+    push & email --> user
+    backend -->|scheduled fetch, robots.txt respected| banks
+    mobile --> attest
+    backend --> attest
+    backend --> obs
 ```
 
 ### 1.2 Containers and components
@@ -62,84 +83,89 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph clients[Clients]
-        web[Web app<br/>Next.js]
-        admin[Admin console<br/>Next.js, separate auth]
+        mob[apps/mobile<br/>Expo, Expo Router]
+        webapp[apps/web<br/>Next.js]
+        adm[apps/admin<br/>Next.js]
     end
 
-    subgraph runtime[AWS ap-south-1]
-        subgraph apiSvc[API service: NestJS on Fastify]
-            auth[Auth module]
-            consent[Consent module]
-            catalog[Card catalog module]
-            rulesAdmin[Rule authoring module]
-            wallet[User cards module]
-            trips[Trips module]
-            qa[Questions module]
-            ai[AI orchestrator]
-            engine[(Rules engine<br/>pure library)]
-            rights[Data rights module<br/>export, erase]
-        end
-
-        subgraph workerSvc[Worker service: NestJS standalone]
-            sched[Schedulers]
-            alertGen[Alert generators]
-            delivery[Delivery workers]
-            fanout[Rule change fan-out]
-        end
-
-        pg[(PostgreSQL 16)]
-        redis[(Redis<br/>BullMQ queues, rate limits)]
-        s3[(S3<br/>T&C snapshots, exports)]
-        kms[[KMS]]
+    subgraph api[apps/api: NestJS on Fastify]
+        authm[Auth<br/>passkeys, devices,<br/>risk, step-up]
+        cons[Consents]
+        catm[Cards catalog]
+        wal[User cards and wallet]
+        rec[Purchase recommendation]
+        upg[Upgrade advisor]
+        avl[Availment links<br/>and claims guides]
+        trp[Trips]
+        alr[Alerts feed and<br/>preferences]
+        rev[Annual review]
+        rights[Data export and<br/>account deletion]
+        rulesm[Rule authoring,<br/>review queue, publish]
+        aim[AI copilot<br/>Claude and Gemini adapters]
+        intl[Internal API<br/>for workers]
     end
 
-    llm[[LLM provider]]
-    chan[[Notification providers]]
+    subgraph pkgs[Shared packages]
+        eng[packages/rules-engine<br/>pure TS]
+        shared[packages/shared<br/>zod schemas, typed API client]
+        ui[packages/ui<br/>design tokens]
+        db[packages/db<br/>Drizzle schema, migrations]
+    end
 
-    web --> auth & consent & wallet & trips & qa & rights
-    admin --> catalog & rulesAdmin
-    qa --> ai
-    ai --> engine
-    ai --> llm
-    wallet --> engine
-    trips --> engine
-    apiSvc --> pg
-    apiSvc --> redis
-    rulesAdmin --> s3
-    rulesAdmin -->|on publish| redis
-    workerSvc --> pg
-    redis --> sched & fanout & delivery
-    alertGen --> engine
-    delivery --> chan
-    apiSvc & workerSvc --> kms
+    subgraph workers[Workers]
+        wa[workers/alerts<br/>Node, BullMQ]
+        wd[workers/docs<br/>Python]
+    end
+
+    pg[(PostgreSQL 16)]
+    redis[(Redis)]
+    s3[(S3<br/>T&C snapshots, exports)]
+
+    mob & webapp --> shared
+    mob & webapp & adm --> ui
+    mob & webapp --> authm & wal & rec & upg & avl & trp & alr & rev & rights & cons & aim
+    adm --> rulesm & catm
+    rec & upg & trp & rev & wal & aim & rulesm --> eng
+    api --> db --> pg
+    api --> redis
+    wa --> eng
+    wa --> db
+    redis --> wa
+    wd --> intl
+    wd --> s3
+    rulesm --> s3
 ```
 
 **Key decisions shown above**
 
-- The **rules engine is a pure library** (`packages/rules-engine`) with no I/O. The API, the AI orchestrator and the worker all call the same code, so every surface gives the same number for the same input.
-- **API and worker are two deployables built from one codebase**, so they share modules, DB schema and validation.
-- The **admin console is a separate app with separate auth** (SSO plus MFA), so a consumer token can never reach rule authoring.
+- **The rules engine is one pure library** used by the API, the AI copilot, the admin impact preview and the alerts worker. Every surface gives the same number for the same input.
+- **`packages/db` is an addition** to the layout in `BUILD_PROMPTS.md`. Phase 2 builds the schema before the API exists in Phase 3, and both the API and `workers/alerts` need it. Putting it in `packages/shared` would pull database code into the mobile bundle. See Q13.
+- **The Python document worker talks to the API, not straight to Postgres.** Rule validation (zod) and audit logging then stay in one place. Python checks its LLM output against JSON Schemas exported from the zod schemas, and the API validates again with zod.
+- **The admin console has its own login** (SSO with MFA) and role checks, separate from consumer passkeys.
 
-### 1.3 Repository layout (proposed)
+### 1.3 Repository layout
 
 ```
 apps/
-  api/            NestJS (Fastify adapter) HTTP API
-  worker/         NestJS standalone app: BullMQ processors and schedulers
-  web/            Next.js consumer app
-  admin/          Next.js internal console
+  mobile/         Expo + Expo Router (iOS, Android)
+  web/            Next.js consumer web app
+  admin/          Next.js admin console for rules analysts
+  api/            NestJS (Fastify adapter), includes the AI copilot module
+workers/
+  alerts/         Node + BullMQ: scheduled and event jobs, delivery
+  docs/           Python: T&C fetch, extract, diff, draft proposals
 packages/
-  db/             Drizzle schema, migrations, seed data
-  rules-engine/   Pure TS evaluation library (no I/O)
-  rule-schemas/   Zod schemas for each benefit rule kind (shared by admin, API, engine)
-  ai/             Prompt templates, tool definitions, redaction, output checks
-  contracts/      Shared API types (generated from OpenAPI)
-  config/         ESLint, tsconfig, Prettier presets
-evals/            AI golden sets and runners
-docs/             This file, ADRs, runbooks
+  rules-engine/   Pure TS evaluation library
+  shared/         zod schemas, rule kind schemas, generated typed API client
+  ui/             Design tokens (colours, type, spacing, light and dark)
+  db/             Drizzle schema, migrations, demo seed (proposed addition)
+evals/            Golden AI question set and runner
+infra/            Terraform (Phase 10)
+docs/             ARCHITECTURE, PROGRESS, RUNBOOK, COMPLIANCE, ADRs
+docker-compose.yml  Postgres and Redis for local development
 ```
 
-Tooling: pnpm workspaces, Turborepo, Node 22 LTS, TypeScript strict mode.
+Tooling: pnpm workspaces, Turborepo, Node 22 LTS, TypeScript strict. Python 3.12 with `uv`, `ruff` and `mypy` for `workers/docs`.
 
 ---
 
@@ -149,43 +175,40 @@ Tooling: pnpm workspaces, Turborepo, Node 22 LTS, TypeScript strict mode.
 
 | Criterion | NestJS | Fastify (plain) |
 |---|---|---|
-| Structure for a growing codebase | Modules, DI, guards, interceptors are built in and opinionated | You design the structure yourself |
-| Raw performance | Good. Close to Fastify when run on the Fastify adapter | Excellent |
-| Consent and auth enforcement | Guards plus custom decorators (`@RequiresConsent('ai_processing')`) applied per route | Hooks. Works, but you build the pattern |
-| Audit logging | Interceptors give one central place | `onRequest`/`onResponse` hooks |
-| Background jobs | `@nestjs/bullmq` gives the same module system in the worker | Separate wiring |
-| Testability | DI makes swapping the LLM, clock and DB easy | Manual DI or plugins |
-| AI-assisted development | Strong conventions mean generated code tends to stay consistent across phases | More freedom, more drift |
-| Downsides | Decorators, more boilerplate, steeper first week | Less guidance, conventions must be written down and enforced |
+| Structure for 13+ endpoint groups across many phases | Modules, DI, guards and interceptors are built in | You design and enforce the structure yourself |
+| Passkeys, device binding, risk scoring, step-up | Guards compose cleanly, for example `@StepUp('export')` and `@RequiresConsent('ai_logging')` | Hooks. Works, but you build the pattern |
+| Audit logging, rate limiting | Interceptors and `@nestjs/throttler`, one central place | Hooks and plugins |
+| OpenAPI spec and typed client | `@nestjs/swagger` with `nestjs-zod` generates the spec from the same zod schemas | `@fastify/swagger` with a zod type provider. Also good |
+| Raw performance | Close to Fastify when run on the Fastify adapter | Best |
+| Testability | DI makes swapping the LLM adapter, clock, SMS provider and DB easy | Manual |
+| AI-assisted development | Strong conventions keep generated code consistent across phases | More drift between phases |
+| Downsides | Decorators, boilerplate, steeper first week | Conventions have to be written down and policed |
 
 **Recommendation: NestJS running on the Fastify adapter.**
 
-- We get Nest's structure (which matters most for a small team building in many phases) and Fastify's HTTP performance and schema validation underneath.
-- Consent checks, audit logging and rate limiting are cross-cutting and map cleanly to guards and interceptors.
-- The worker reuses the same modules as a Nest standalone app, so there's no second framework.
-- Validation uses Zod (via `nestjs-zod`) rather than class-validator, so the same schemas work in the engine, admin console and API.
+- Phase 3 is the heaviest phase: passkeys, device binding, risk scoring, step-up, rate limiting, audit logging and 13 endpoint groups. These are cross-cutting concerns, and Nest's guards and interceptors are designed for exactly that.
+- The Fastify adapter keeps us comfortably inside the Phase 10 target of p95 under 300 ms. The engine is pure CPU work in memory, so framework overhead is a small share of that time.
+- Validation is zod everywhere (via `nestjs-zod`), so the schemas in `packages/shared` drive the API, the OpenAPI spec, the typed client and the admin forms.
+- Passkeys use `@simplewebauthn/server`.
 
-**What would change my mind:** if the API turns out to be a thin layer (fewer than about 10 routes) with most of the logic in the engine and worker, plain Fastify would be simpler.
+**What would change my mind:** nothing in the prompts points to plain Fastify. It would only win if the API became a thin layer, and it doesn't.
 
 ### 2.2 ORM: Prisma vs Drizzle
 
 | Criterion | Prisma | Drizzle |
 |---|---|---|
-| Schema style | Own DSL (`schema.prisma`) | TypeScript, close to SQL |
-| Postgres features we need: JSONB, partial unique indexes, exclusion constraints on date ranges, row-level security, generated columns | Several need hand-written SQL migrations alongside the schema | Most can be expressed in the schema. The rest go in plain SQL migrations Drizzle manages |
-| Migrations | Generated, good workflow, less transparent | Plain SQL files that are easy to review in PRs |
-| Complex queries (effective rule as of a date, cohort fan-out) | Often falls back to raw SQL | Query builder handles them, with types |
-| Runtime weight | Heavier client (lighter since v7) | Thin, no engine |
-| Ecosystem and docs | Larger, more mature | Smaller but active |
-| DPDP audit (being able to show exactly what SQL touches personal data) | Harder to see | Easy |
+| Schema style | Own DSL | TypeScript, close to SQL |
+| Postgres features we need: JSONB, exclusion constraint on version ranges, partial unique indexes | Some need hand-written SQL beside the schema | Expressed in the schema, or in plain SQL migrations Drizzle manages |
+| Migrations | Generated, less transparent | Plain SQL files, easy to review in PRs |
+| Complex queries (rules in effect on a date, impact preview across users) | Often falls back to raw SQL | Typed query builder handles them |
+| Runtime weight in API and worker | Heavier (lighter since v7) | Thin |
+| Ecosystem | Larger | Smaller but active |
 
 **Recommendation: Drizzle with PostgreSQL 16.**
 
-- Versioned benefit rules depend on a Postgres **exclusion constraint** (no two published versions of the same rule can overlap in time) and on JSONB. Drizzle handles these without a second migration system.
-- SQL-first migrations are easier to review for a schema that holds personal and financial data.
-- JSONB columns can be typed with the same Zod schemas from `packages/rule-schemas`.
-
-**What would change my mind:** if the team already knows Prisma well and the schema stays simple, Prisma's DX would win on speed.
+- Versioned rules depend on a Postgres **exclusion constraint** (two published versions of the same rule can't overlap in time) and on JSONB rule definitions. Drizzle handles both without a second migration system.
+- SQL-first migrations are easier to review for a schema with personal and financial data.
+- JSONB columns are typed with the same zod schemas from `packages/shared`.
 
 ---
 
@@ -193,30 +216,24 @@ Tooling: pnpm workspaces, Turborepo, Node 22 LTS, TypeScript strict mode.
 
 ### 3.1 Conventions
 
-- Primary keys are `uuid` v7 (time-ordered, good for indexes).
-- Money is stored as `bigint` **paise**. Rates are `numeric(10,6)`. Floats are never used for money or rates.
-- Timestamps are `timestamptz`, stored in UTC and shown in IST.
-- Personal data columns are marked `-- PII` in the schema and listed in `docs/data-inventory.md` (to be written), which also feeds the DPDP notice.
-- Encrypted columns use envelope encryption with KMS. Lookups use an HMAC "blind index" column (for example `phone_hash`) so we never query plaintext.
-- Soft delete is **not** used for personal data. Erasure is a real delete or an irreversible anonymisation (see 6.3).
+- Primary keys are `uuid` v7.
+- Money is `bigint` **paise**, rates are `numeric(10,6)`, and points are `bigint`. Floats are never used for money.
+- Timestamps are `timestamptz` in UTC, shown in IST.
+- PII columns are marked `-- PII` and listed in `docs/COMPLIANCE.md` (Phase 10).
+- Sensitive PII (phone, email) uses envelope encryption with KMS. Lookups use an HMAC "blind index" column such as `phone_hash`.
+- Personal data is never soft-deleted. Account deletion is a hard delete or irreversible anonymisation (section 5.3).
 
-### 3.2 Entity relationship diagram
+### 3.2 Identity, devices and consent
 
 ```mermaid
 erDiagram
+    USERS ||--o{ DEVICES : binds
+    USERS ||--o{ PASSKEY_CREDENTIALS : registers
+    DEVICES ||--o{ PASSKEY_CREDENTIALS : "holds (platform passkeys)"
+    USERS ||--o{ SESSIONS : opens
+    DEVICES ||--o{ SESSIONS : "runs on"
     USERS ||--o{ CONSENTS : grants
-    USERS ||--o{ USER_CARDS : holds
-    USERS ||--o{ TRIPS : plans
-    USERS ||--o{ QUESTIONS : asks
-    USERS ||--o{ ALERTS : receives
-    ISSUERS ||--o{ CARDS : issues
-    CARDS ||--o{ USER_CARDS : "instance of"
-    CARDS ||--o{ BENEFIT_RULES : "has versions"
-    QUESTIONS ||--o{ EVALUATIONS : "answered by"
-    TRIPS ||--o{ EVALUATIONS : "assessed by"
-    EVALUATIONS }o--o{ BENEFIT_RULES : "used versions"
-    ALERTS }o--o| BENEFIT_RULES : "triggered by"
-    NOTICES ||--o{ CONSENTS : "shown version"
+    NOTICES ||--o{ CONSENTS : "version shown"
 
     USERS {
         uuid id PK
@@ -224,12 +241,42 @@ erDiagram
         bytea phone_hash UK "HMAC blind index"
         bytea email_enc "PII, encrypted, optional"
         text display_name "PII, optional"
-        text preferred_language
-        text home_city
-        date dob_year_verified "age gate only"
-        text status "active, pending_erasure"
+        boolean age_18_plus
+        text status "active, pending_deletion"
         timestamptz created_at
         timestamptz last_active_at
+    }
+    DEVICES {
+        uuid id PK
+        uuid user_id FK
+        text platform "ios, android, web"
+        text label "eg Pixel 8"
+        text attestation_status "verified, failed, not_supported"
+        bytea device_public_key
+        timestamptz bound_at
+        timestamptz revoked_at
+    }
+    PASSKEY_CREDENTIALS {
+        uuid id PK
+        uuid user_id FK
+        uuid device_id FK "nullable for synced passkeys"
+        bytea credential_id UK
+        bytea public_key
+        bigint sign_count
+        text transports
+        boolean backed_up
+        timestamptz last_used_at
+    }
+    SESSIONS {
+        uuid id PK
+        uuid user_id FK
+        uuid device_id FK
+        bytea refresh_token_hash
+        smallint risk_score "0 to 100"
+        jsonb risk_signals
+        timestamptz step_up_until
+        timestamptz expires_at
+        timestamptz revoked_at
     }
     NOTICES {
         uuid id PK
@@ -242,26 +289,116 @@ erDiagram
     CONSENTS {
         uuid id PK
         uuid user_id FK
-        text purpose "core_service, ai_processing, notify_email, notify_push, notify_whatsapp, analytics"
+        text purpose "core_service, ai_copilot, ai_question_logging, notify_push, notify_email, analytics"
         uuid notice_id FK
         text action "granted, withdrawn"
-        text channel "web, ios, android"
-        bytea evidence_hash
+        uuid device_id FK
         timestamptz occurred_at
     }
+```
+
+### 3.3 Catalog, rules and document monitoring
+
+```mermaid
+erDiagram
+    ISSUERS ||--o{ CARDS : issues
+    CARDS ||--o{ BENEFIT_RULES : "has versions"
+    BENEFIT_RULES ||--o{ RULE_REVIEWS : "reviewed in"
+    ISSUERS ||--o{ SOURCE_DOCUMENTS : publishes
+    SOURCE_DOCUMENTS ||--o{ DOCUMENT_VERSIONS : "snapshotted as"
+    DOCUMENT_VERSIONS ||--o{ BENEFIT_RULES : "proposed drafts"
+    CARDS ||--o{ CLAIMS_GUIDES : "has"
+
     ISSUERS {
         uuid id PK
-        text name
+        text name "Demo Bank in seed data"
         text slug UK
+        boolean is_demo
     }
     CARDS {
         uuid id PK
         uuid issuer_id FK
         text name
+        text type "credit, debit"
         text network "visa, mastercard, rupay, amex, diners"
-        text variant
         bigint annual_fee_paise
         text status "active, discontinued"
+        boolean is_demo
+    }
+    BENEFIT_RULES {
+        uuid id PK
+        uuid card_id FK
+        text rule_key "stable id, eg dining_accelerated"
+        int version
+        text kind "reward_rate, cap, milestone, lounge, forex_markup, fee_waiver, insurance, points_expiry, redemption_value"
+        jsonb definition "validated by zod per kind"
+        jsonb availment "Avail now link and steps"
+        int priority
+        tstzrange valid_during "when the bank T&C applies"
+        text status "draft, in_review, published, retired"
+        text origin "analyst, docs_worker"
+        text source_url "required"
+        date verified_on "shown to users"
+        uuid source_document_version_id FK
+        uuid authored_by
+        uuid published_by
+        timestamptz recorded_at
+    }
+    RULE_REVIEWS {
+        uuid id PK
+        uuid rule_id FK
+        uuid reviewer_id
+        text decision "approve, reject, request_changes"
+        text comment
+        timestamptz decided_at
+    }
+    SOURCE_DOCUMENTS {
+        uuid id PK
+        uuid issuer_id FK
+        text url
+        text kind "html, pdf"
+        text fetch_schedule
+        timestamptz last_fetched_at
+    }
+    DOCUMENT_VERSIONS {
+        uuid id PK
+        uuid source_document_id FK
+        bytea content_sha256
+        text s3_key
+        text extracted_text_s3_key
+        jsonb diff_summary
+        timestamptz fetched_at
+    }
+    CLAIMS_GUIDES {
+        uuid id PK
+        uuid card_id FK
+        text benefit_kind
+        text steps_md
+        text source_url
+        date verified_on
+    }
+```
+
+### 3.4 User activity
+
+```mermaid
+erDiagram
+    USERS ||--o{ USER_CARDS : holds
+    CARDS ||--o{ USER_CARDS : "instance of"
+    USERS ||--o| SPEND_PROFILES : "estimates"
+    USERS ||--o{ TRIPS : plans
+    USERS ||--o{ QUESTIONS : asks
+    USERS ||--o{ ALERTS : receives
+    USERS ||--o| ALERT_PREFERENCES : sets
+    QUESTIONS ||--o{ EVALUATIONS : "answered by"
+    TRIPS ||--o{ EVALUATIONS : "assessed by"
+    ALERTS }o--o| EVALUATIONS : "computed by"
+
+    USERS {
+        uuid id PK
+    }
+    CARDS {
+        uuid id PK
     }
     USER_CARDS {
         uuid id PK
@@ -270,31 +407,23 @@ erDiagram
         text nickname
         char last4 "optional, never full PAN"
         smallint statement_day
-        date fee_anniversary
+        date renewal_date
         bigint cycle_spend_paise "user entered"
+        bigint year_spend_paise "user entered"
+        bigint points_balance "user entered"
+        date points_expiry_date "user entered"
         timestamptz removed_at
     }
-    BENEFIT_RULES {
-        uuid id PK
-        uuid card_id FK
-        text rule_key "stable id, eg dining_accelerated"
-        int version
-        text kind "reward_rate, cap, milestone, lounge, forex_markup, fee_waiver, insurance, redemption_value"
-        jsonb definition "validated by Zod per kind"
-        int priority
-        tstzrange valid_during "when the bank T&C applies"
-        text status "draft, in_review, published, retired"
-        text source_url
-        text source_snapshot_key "S3 key"
-        uuid authored_by
-        uuid approved_by
-        timestamptz recorded_at
+    SPEND_PROFILES {
+        uuid user_id PK
+        jsonb monthly_by_category "paise per category, user estimate"
+        timestamptz updated_at
     }
     TRIPS {
         uuid id PK
         uuid user_id FK
         text destination_country
-        text[] airports
+        text[] airports "IATA codes"
         date start_date
         date end_date
         bigint est_spend_paise
@@ -302,68 +431,73 @@ erDiagram
     }
     QUESTIONS {
         uuid id PK
-        uuid user_id FK
-        text text_redacted
-        jsonb parsed_intent
+        uuid user_id FK "null if logging consent absent"
+        text text_redacted "only with ai_question_logging consent"
+        jsonb tool_calls
         text answer_md
+        text provider "claude, gemini"
         text model_id
         text prompt_version
-        text guard_result "passed, numbers_mismatch, refused"
+        text outcome "answered, refused_no_rule, out_of_scope, guard_fallback"
         smallint user_rating
         timestamptz created_at
     }
     EVALUATIONS {
         uuid id PK
         uuid user_id FK
-        text source "question, trip, alert, api"
-        uuid source_id
+        text fn "getWalletBenefits, recommendCardForPurchase, getTripBenefits, getUpcomingDeadlines, compareRuleVersions"
+        text source "api, copilot, alert, admin_preview"
         jsonb input_snapshot
         uuid[] rule_version_ids
         text engine_version
         jsonb result
-        jsonb trace
         timestamptz evaluated_at
     }
     ALERTS {
         uuid id PK
         uuid user_id FK
-        text type "fee_due, milestone_near, lounge_reset, rule_changed, trip_prep, benefit_expiring"
+        text type "quota_reset, points_expiry, milestone_deadline, fee_waiver_deadline, renewal, devaluation"
         text dedupe_key UK
         uuid rule_id FK
         jsonb payload
-        text channel
+        text channel "push, email, in_app"
         text status "pending, sent, failed, suppressed, read"
         timestamptz scheduled_for
         timestamptz sent_at
     }
+    ALERT_PREFERENCES {
+        uuid user_id PK
+        jsonb per_type "on, off, digest"
+        text frequency "instant, daily_digest, weekly_digest"
+        time quiet_start "IST"
+        time quiet_end "IST"
+    }
 ```
 
-Also needed but left off the diagram: `audit_log` (append-only, admin and data-rights actions), `admin_users`, `data_rights_requests`, `notification_deliveries` (one row per provider attempt).
+Also needed: `audit_log` (append-only), `admin_users` with roles `analyst`, `reviewer`, `admin`, `data_rights_requests`, `notification_deliveries` (one row per provider attempt) and `outbox` (section 4.5).
 
-### 3.3 Table notes
+### 3.5 Table notes
 
-**users**
-- Phone is the login identifier. It's stored encrypted and looked up through `phone_hash`.
-- We keep only a verified "18 or over" flag (via `dob_year_verified`), not a full date of birth.
+**users, devices, passkey_credentials, sessions**
+
+- Phone is stored encrypted and used only at sign-up and recovery. Login is by passkey.
+- A device is "bound" when it registers a passkey and, on mobile, passes attestation (App Attest or Play Integrity).
+- `sessions.risk_score` is recalculated on each refresh from signals such as a new device, unusual location, failed attestation or high request rate. A high score forces step-up.
+- `step_up_until` is set by a fresh passkey check and lasts 5 minutes. Sensitive actions need it: data export, account deletion, adding or removing a device, and changing phone or email.
 
 **consents** (append-only event log)
-- Every grant or withdrawal is a new row, so we can always prove what a user agreed to, when, and against which notice version.
-- The current state comes from a view, `consent_current` (latest event per user and purpose).
-- `core_service` is required to use the app. Every other purpose is optional and can be withdrawn on its own.
 
-**cards** (product catalog, not a user's card)
-- One row per product, for example "HDFC Infinia".
-- Public data only, so no PII.
+- Each grant or withdrawal is a new row. A view called `consent_current` gives the latest state per purpose.
+- `ai_question_logging` is separate from `ai_copilot`. A user can use the copilot without their questions being stored, which is what "log questions (with consent)" in Phase 8 means.
 
-**user_cards**
-- Links a user to a product. This is how we follow RBI's rules on card data: no PAN, CVV or expiry, and `last4` is optional and only for display.
-- `cycle_spend_paise` is entered by the user. It's what makes milestone and cap tracking possible without reading transactions (see Q3).
+**cards and issuers**
 
-**benefit_rules** (versioned and bitemporal)
-- `valid_during` is the **valid time**: when the bank's terms apply.
-- `recorded_at` plus the row's immutability give the **transaction time**: when we learned about it.
-- A published row is never updated. A change is a new `version` with a new range, and the old one is closed or retired.
-- An exclusion constraint keeps published versions from overlapping:
+- Product catalog. `is_demo` marks the fictional seed data, and the apps show a "Demo" badge on these cards.
+
+**benefit_rules** (versioned)
+
+- A published row is never updated. A change is a new `version` with its own `valid_during` range.
+- Two published versions of the same rule can't overlap in time:
 
 ```sql
 ALTER TABLE benefit_rules ADD CONSTRAINT no_overlapping_published
@@ -371,7 +505,11 @@ ALTER TABLE benefit_rules ADD CONSTRAINT no_overlapping_published
   WHERE (status = 'published');
 ```
 
-- `definition` is checked against a Zod schema per `kind`. Here's an example of the `reward_rate` kind:
+- `source_url` is required (Phase 6), and `verified_on` is shown to users (Phases 4 and 8).
+- `availment` holds the "Avail now" target: a deep link or URL plus short steps.
+- Drafts from the document worker have `origin = docs_worker` and can only enter `draft` status.
+- Moving to `published` needs a `reviewer` approval in `rule_reviews` from someone other than the author.
+- Here's an example of the `reward_rate` kind (fictional card):
 
 ```json
 {
@@ -383,137 +521,174 @@ ALTER TABLE benefit_rules ADD CONSTRAINT no_overlapping_published
 }
 ```
 
-- Publishing needs **two people**: the author can't approve their own rule. Each rule keeps an S3 snapshot of the T&C page it came from, so any answer can be traced back to its source.
+**user_cards and spend_profiles**
+
+- No PAN, CVV or expiry. `last4` is optional and for display only.
+- The spend, points and expiry fields are **user estimates**. Without them, `getUpcomingDeadlines` (milestones, points expiry) and the upgrade advisor have nothing to work from. See Q3.
 
 **evaluations**
-- One immutable record per engine run. It holds the full input snapshot, the exact rule version IDs used, the engine version and a step-by-step trace.
-- That's enough to reproduce any answer, explain it to a user, and debug complaints.
 
-**questions**
-- Stores the **redacted** question text, the parsed intent, the final answer and the result of the guardrail check.
-- Links to one or more evaluations.
-
-**trips**
-- Destination and dates feed evaluations for forex markup, lounge access at the listed airports, and travel insurance. They also schedule `trip_prep` alerts.
+- One immutable row per engine call, holding the inputs, exact rule versions, engine version and result. That's enough to reproduce and explain any number shown to a user.
 
 **alerts**
-- `dedupe_key` (for example `fee_due:{user_card_id}:{2026}`) makes generation idempotent, so a scheduler running twice never sends twice.
+
+- `dedupe_key` (for example `renewal:{user_card_id}:2026`) makes jobs idempotent, as Phase 7 requires.
 
 ---
 
-## 4. How the rules engine, AI layer and alerts worker interact
+## 4. How the rules engine, AI layer and workers interact
 
 ### 4.1 The core principle
 
-> The rules engine is the only source of numbers. The AI layer understands the question and explains the answer. It never calculates rewards, fees or eligibility itself.
+> The rules engine is the only source of numbers. The AI copilot understands the question and explains the answer. It never calculates rewards, fees or eligibility, and it refuses when no verified rule exists.
 
-This is the main defence against wrong financial answers from the AI.
+### 4.2 Rules engine (`packages/rules-engine`)
 
-### 4.2 Rules engine
+**Shared input:** the user's cards, the **published** rules in effect on the context date, and a context (amount, merchant category, channel, date, airport, trip). The date is always passed in, never read from the clock.
 
-- **Input:** an evaluation context and the set of rule versions in effect.
-  - Context includes the user's cards, the spend (amount, category, channel, country, currency, date) and cycle state.
-  - Rule versions are chosen as of the spend date, not today.
-- **Process:**
-  1. Filter rules by scope.
-  2. Resolve conflicts by `priority`, then by specificity, then by `stacking` mode.
-  3. Apply caps.
-  4. Convert points to rupee value using the `redemption_value` rules.
-  5. Rank the cards.
-- **Output:** ranked results per card, with value in paise, applied rules, warnings (for example "cap reached" or "fuel excluded") and a trace.
-- **Properties:** deterministic, no I/O, no clock (date is an input), and versioned (`engine_version` is recorded on every evaluation).
+| Function | Answers | Used by |
+|---|---|---|
+| `getWalletBenefits(cards, rules, ctx)` | All benefits per card, with availment, `verified_on` and source | Wallet screen, copilot |
+| `recommendCardForPurchase(cards, rules, purchase)` | Cards ranked by value, with step-by-step maths, caps and exclusions | "Ask before you pay", copilot |
+| `getTripBenefits(cards, rules, trip)` | Forex cost, lounge access at the trip's airports, travel insurance | Trip mode, alerts |
+| `getUpcomingDeadlines(cards, rules, userState, date, horizon)` | Quota resets, points expiry, milestone and fee-waiver deadlines, renewals | Alerts worker, wallet |
+| `compareRuleVersions(oldRules, newRules, cards, spendProfile)` | Yearly value change per user (devaluation impact) | Admin impact preview, devaluation alerts |
 
-### 4.3 Question flow (AI layer)
+**Possibly a 6th function.** The upgrade advisor and annual review need "yearly value of card X for this spend profile". I'd add `estimateAnnualValue(card, rules, spendProfile)` and build both on top of `recommendCardForPurchase` logic, so the maths isn't duplicated (Q14).
+
+**Output contract.** Every result includes:
+
+- the value in paise and points
+- a `math` array of readable steps, for example `12,000 / 150 x 5 = 400 pts`, then `400 x 0.50 = 200`
+- the caps applied and the exclusions hit
+- the IDs of the rule versions used, plus their `verified_on` dates and source URLs
+
+**How rules are applied:** filter by scope, then resolve conflicts by `priority`, then specificity, then stacking mode. Next apply caps, convert points to rupees using `redemption_value` rules, and finally rank.
+
+### 4.3 AI copilot
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant U as User (web)
-    participant API as Questions module
+    participant U as User (mobile or web)
+    participant API as Copilot module
     participant G as Consent guard
-    participant AI as AI orchestrator
-    participant L as LLM
+    participant P as Provider adapter<br/>(Claude or Gemini by config)
     participant E as Rules engine
     participant DB as Postgres
 
-    U->>API: POST /questions "Which card for a 12k flight on MakeMyTrip?"
-    API->>G: check consent ai_processing
+    U->>API: "Which card for a 12,000 flight booking?"
+    API->>G: check ai_copilot consent
     G-->>API: ok
-    API->>AI: ask(user_id, text)
-    AI->>AI: redact PII (phone, email, names, card numbers)
-    AI->>L: classify intent and extract slots (structured output)
-    L-->>AI: {intent: best_card_for_spend, amount: 1200000, category: travel_ota, channel: online}
-    AI->>DB: load user_cards and effective rule versions
-    AI->>E: evaluate(context, rules)
-    E-->>AI: ranked result and trace
-    AI->>DB: insert evaluation
-    AI->>L: compose answer from evaluation JSON only
-    L-->>AI: answer text
-    AI->>AI: guardrail: every number in the answer must match the evaluation
-    alt guard passes
-        AI->>DB: insert question (redacted text, answer, evaluation ids)
-        AI-->>U: answer with "why" and T&C source links
+    API->>API: redact PII
+    API->>P: messages + tool definitions (engine functions only)
+    P-->>API: tool_call recommendCardForPurchase({amount: 1200000, category: travel, channel: online})
+    API->>DB: load user's cards and published rules
+    API->>E: recommendCardForPurchase(...)
+    E-->>API: ranked result, math, rule versions, verified_on
+    API->>DB: insert evaluation
+    API->>P: tool_result
+    P-->>API: answer text
+    API->>API: number guard: every figure must appear in a tool result
+    alt guard passes and a verified rule was used
+        API-->>U: answer + source links + "Verified on" dates
     else guard fails
-        AI-->>U: template answer built straight from the evaluation
+        API-->>U: template answer built straight from the tool result
+    else no published rule covers the question
+        API-->>U: "I don't have a verified rule for that yet" (no guess)
     end
+    API->>DB: insert question (redacted text only if ai_question_logging consent)
 ```
 
-**AI layer design rules**
+**Design rules**
 
-- **Tools, not free text.** The LLM can only call read-only tools: `evaluate_spend`, `get_card_benefits`, `check_lounge_access` and `get_trip_summary`. The `user_id` comes from the session and is never taken from the model's arguments.
-- **Redaction before every call.** Phone numbers, emails, 12 to 19 digit numbers that look like cards, and names (where possible) are masked. Only the redacted text is stored.
-- **Number guard.** After the answer is written, any currency amount, percentage or point figure must appear in the evaluation result. If not, we fall back to a deterministic template answer.
-- **Scope guard.** Questions about loans, credit scores, applying for cards or investment advice get a polite out-of-scope reply. An open question is whether "which new card should I get" is in scope (Q7).
-- **Versioning.** `prompt_version` and `model_id` are stored on every question, so eval regressions can be traced.
-- **Fallbacks.** If the LLM is down, structured endpoints like "best card for this spend" still work, because they call the engine directly.
+- **Provider-agnostic.** A `LlmProvider` interface with `ClaudeAdapter` and `GeminiAdapter`, chosen by config (`AI_PROVIDER=claude|gemini`). Both adapters map the same tool definitions to each provider's format. Evals run against whichever provider is configured.
+- **Tools are only engine functions.** The `user_id` comes from the session and is never taken from the model's arguments. No tool can write data.
+- **Number guard.** Every currency figure, percentage or point value in the answer must appear in a tool result in the same turn. If not, a deterministic template answer is shown instead.
+- **No verified rule, no answer.** If the needed rule doesn't exist or isn't published, the copilot says so and offers to flag the gap to the analysts.
+- **Redaction** of phone numbers, emails, 12 to 19 digit card-like numbers and names (where possible) happens before every provider call.
+- **Prompt and model versions** are stored with each question, so eval results can be traced.
 
-### 4.4 Alerts worker
+### 4.4 Alerts worker (`workers/alerts`)
 
-The worker runs BullMQ on Redis and has three kinds of producers.
+A Node service using BullMQ on Redis. It imports `packages/db` and `packages/rules-engine` directly. It doesn't need NestJS.
 
-| Producer | Trigger | Example alerts |
-|---|---|---|
-| Daily scheduler | Repeatable job at 07:00 IST, batched by user | `fee_due` 30 and 7 days before anniversary, `milestone_near` (user-entered spend at 80% or more), `lounge_reset` at quarter start, `benefit_expiring` |
-| Trip scheduler | Trip start date minus 3 days | `trip_prep`: best card abroad, forex markup, lounges at the listed airports |
-| Rule change fan-out | `benefit_rules` publish event | `rule_changed`: "Your Axis Atlas lounge access changes from 1 Nov" with a before and after diff from the engine |
+| Job | Trigger | Engine call | Alert types |
+|---|---|---|---|
+| Daily deadlines scan | Repeatable, 07:00 IST, batched by user | `getUpcomingDeadlines` | `quota_reset`, `points_expiry`, `milestone_deadline`, `fee_waiver_deadline`, `renewal` |
+| Trip prep | Trip start minus 3 days | `getTripBenefits` | `trip_prep` |
+| Rule published | Outbox event from the API | `compareRuleVersions` per affected user | `devaluation` (or `improvement`) |
+| Delivery | After an alert is created | none | push via Expo, email. WhatsApp is an interface with a no-op implementation |
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant A as Admin console
-    participant R as Rule authoring
+    participant R as Reviewer (admin)
+    participant API as Rules module
     participant DB as Postgres
     participant Q as BullMQ
-    participant W as Fan-out worker
+    participant W as workers/alerts
     participant E as Rules engine
-    participant D as Delivery worker
-    participant P as Provider
+    participant X as Expo push / email
 
-    A->>R: approve rule version v3 (second person)
-    R->>DB: tx: publish v3, close v2 range, write audit_log, write outbox row
+    R->>API: approve and publish v3
+    API->>DB: tx: publish v3, close v2 range, audit_log, outbox row
     DB-->>Q: outbox relay enqueues rule.published
     Q->>W: rule.published(card_id, rule_key, v2 to v3)
-    W->>DB: find users holding card_id (batched)
-    W->>E: diff evaluation, standard scenario under v2 vs v3
-    W->>DB: insert alerts with dedupe_key (on conflict do nothing)
-    W->>Q: enqueue delivery per alert
-    Q->>D: deliver(alert)
-    D->>DB: check consent_current for the channel
-    alt consented
-        D->>P: send
-        D->>DB: mark sent, record delivery attempt
-    else not consented
-        D->>DB: mark suppressed
+    W->>DB: users holding card_id (batched), spend profiles
+    W->>E: compareRuleVersions(v2, v3, cards, spendProfile)
+    W->>DB: insert alerts (dedupe_key, on conflict do nothing)
+    W->>DB: read alert_preferences and consent_current
+    alt allowed now
+        W->>X: send
+    else quiet hours or digest
+        W->>DB: schedule for later or add to digest
     end
 ```
 
-**Reliability rules**
+**Reliability**
 
-- **Transactional outbox.** Publish events are written in the same DB transaction as the rule change, so we never publish without alerting or alert without publishing.
-- **Idempotency** comes from the `dedupe_key` unique constraint, plus a provider idempotency key where the provider supports one.
-- **Retries:** exponential backoff, 5 attempts, then a dead-letter queue with an on-call alert.
-- **Quiet hours:** nothing goes out between 21:00 and 08:00 IST except time-critical alerts.
-- **Consent is checked at send time**, not just at creation, so a withdrawal takes effect straight away.
+- A **transactional outbox** means a rule is never published without its event, or the reverse.
+- **Retries** use exponential backoff for 5 attempts, then a **dead-letter queue** with a Sentry alert.
+- **Consent and preferences are checked at send time**, so a withdrawal takes effect straight away.
+- **Push payloads carry no personal details**, for example "You have an update about one of your cards". The app fetches the details after login, because push goes through Expo, Apple and Google servers.
+
+### 4.5 Document worker (`workers/docs`, Python)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as Scheduler
+    participant F as Fetcher
+    participant B as Bank site
+    participant S3 as S3
+    participant L as LLM (configured provider)
+    participant API as Internal API
+    participant Q as Admin review queue
+
+    S->>F: fetch source_document (per schedule)
+    F->>B: check robots.txt, then GET (rate limited)
+    B-->>F: HTML or PDF
+    F->>F: extract text, sha256
+    alt hash unchanged
+        F->>API: record fetched_at only
+    else changed
+        F->>S3: store raw and extracted text
+        F->>F: diff against previous version
+        F->>L: changed sections + current published rules, ask for draft updates (JSON Schema)
+        L-->>F: proposed drafts
+        F->>F: validate against exported JSON Schema
+        F->>API: POST document version + drafts (service auth)
+        API->>API: re-validate with zod, status = draft, origin = docs_worker
+        API->>Q: drafts appear for analysts
+    end
+```
+
+**Rules for the document worker**
+
+- **It can never publish.** The internal API token for `workers/docs` only has permission to create drafts. Publishing is checked by role on the server, not left to the worker's own code.
+- **Bank documents are untrusted input.** Text from bank pages could contain instructions aimed at the LLM (prompt injection). That's acceptable here because the worst outcome is a bad draft that a reviewer rejects.
+- **Stack:** `httpx`, `urllib.robotparser`, `trafilatura` for HTML, `pdfplumber` for PDFs, `difflib` for diffs, and a minimal provider adapter using the same `AI_PROVIDER` config.
 
 ---
 
@@ -523,140 +698,145 @@ sequenceDiagram
 
 | Source | What it means for us |
 |---|---|
-| Digital Personal Data Protection Act, 2023 | We are a Data Fiduciary. We need a lawful basis (consent), clear notice, purpose limitation, data minimisation, security safeguards, breach notification and data principal rights. |
-| DPDP Rules, 2025 (notified November 2025, phased start) | These add detail on notice content, consent manager interop, breach reporting timelines, keeping logs for at least 1 year, and erasure notices. Most obligations start about 18 months after notification. **Counsel must confirm the dates and what applies to us.** |
-| RBI card data rules (tokenisation, card-on-file) | Non-issuer entities must not store card credentials. We store no PAN, CVV or expiry, and at most the last 4 digits. |
-| IT Act and CERT-In directions | Report cyber incidents to CERT-In within 6 hours. Keep logs for 180 days, in India. |
+| Digital Personal Data Protection Act, 2023 | We are a Data Fiduciary. We need consent with a clear notice, purpose limitation, data minimisation, security safeguards, breach notification and data principal rights. |
+| DPDP Rules, 2025 (notified November 2025, phased start) | These add detail on notice content, consent managers, breach reporting timelines, keeping logs for at least 1 year, and erasure notices. Most obligations start about 18 months after notification. **Counsel must confirm the dates and what applies to us.** |
+| RBI card data rules (tokenisation, card-on-file) | We store no PAN, CVV or expiry, and at most the last 4 digits. |
+| IT Act and CERT-In directions | Report incidents within 6 hours. Keep logs for 180 days in India. |
+| TRAI DLT rules for commercial SMS | OTP SMS in India needs a registered sender ID and templates with the SMS provider. |
 
-> This section is an engineering approach, not legal advice. A privacy lawyer should review it before launch (R5).
+> This is an engineering approach, not legal advice. Counsel should review it before public launch.
 
-### 5.2 DPDP controls built into the design
+### 5.2 DPDP controls
 
-| DPDP requirement | How CardGuru meets it |
+| Requirement | How CardGuru meets it |
 |---|---|
-| Notice before consent | `notices` table, versioned per language. Shown in the onboarding flow. Each consent row records the notice version. |
-| Free, specific, informed, clear consent | Purposes are listed one by one with separate toggles. No pre-ticked boxes. `core_service` is the only required purpose. |
-| Withdrawing is as easy as giving | One-tap withdrawal per purpose in settings. Takes effect at once, since guards and the delivery worker read `consent_current`. |
-| Purpose limitation | `@RequiresConsent(purpose)` guard on every route that processes data for an optional purpose. CI fails if a route lacks a purpose annotation. |
-| Data minimisation | No PAN, no transactions, no full date of birth, and redacted question text. The LLM gets only redacted text plus evaluation JSON. |
-| Accuracy and correction | Users can edit their profile, cards and trips. |
-| Right to access | "Download my data" builds a JSON plus PDF export through the worker, stored in S3 with a 24-hour signed URL. |
-| Right to erasure | Erasure request leads to `pending_erasure`, then a hard delete or irreversible anonymisation (evaluations are kept only as aggregates with no user link), within a stated SLA. The audit log keeps a pseudonymous record of the request. |
-| Retention | A retention table per data class, enforced by a nightly purge job. Example: inactive accounts get a 48-hour notice then deletion after N years (N to be confirmed, Q9). |
-| Grievance redressal | In-app grievance form and published contact. `data_rights_requests` tracks SLA. |
-| Nominee | Users can name a nominee in settings, stored encrypted. |
-| Security safeguards | See 5.3. |
-| Breach notification | Runbook: notify the Data Protection Board and affected users without delay, with the detailed report within 72 hours, and CERT-In within 6 hours. Templates are kept in `docs/runbooks/`. |
-| Processors | Data processing agreements with the LLM, OTP, email, WhatsApp and cloud providers. LLM provider set to zero data retention where available. |
-| Cross-border transfer | Personal data stays in India. Only redacted text goes to the LLM, which may be hosted outside India. This is allowed unless a country is restricted, but counsel should confirm (Q8). |
+| Notice before consent | Versioned `notices` per language, shown during onboarding. Each consent row records the notice version. |
+| Specific, informed consent | Separate toggles per purpose. Nothing pre-ticked. Only `core_service` is required. |
+| Withdrawal as easy as giving | One tap per purpose in Settings, then Consents. Guards and the alerts worker read `consent_current` live. |
+| Purpose limitation | `@RequiresConsent(purpose)` on routes for optional purposes. CI fails if a route lacks a purpose annotation. |
+| Minimisation | No PAN, no transactions, spend as user estimates, questions stored redacted and only with consent, push payloads free of personal details. |
+| Right to access | Data export (needs step-up). A JSON and PDF bundle is built by a worker job, with a 24-hour signed link. |
+| Right to erasure | Account deletion (needs step-up). Hard delete or anonymisation within a stated SLA. A pseudonymous record is kept in `audit_log`. |
+| Correction | Users can edit their profile, cards, spend profile and trips. |
+| Retention | A retention table per data class, enforced by a nightly purge job (periods in Q11). |
+| Grievance and nominee | In-app grievance form and nominee setting. `data_rights_requests` tracks the SLA. |
+| Breach | Runbook in `docs/RUNBOOK.md`: notify the Data Protection Board and affected users without delay, the detailed report within 72 hours, and CERT-In within 6 hours. |
+| Processors | Data processing agreements with Anthropic, Google, the SMS provider, the email provider, Expo, Sentry and AWS. Zero retention on LLM APIs where offered. Sentry scrubs PII. |
+| Cross-border | Personal data is stored in India. LLM providers receive only redacted text (Q10). |
+| Checklist | `docs/COMPLIANCE.md` in Phase 10. |
 
 ### 5.3 Security controls
 
 | Area | Control |
 |---|---|
-| Identity | Phone OTP with rate limits per phone, IP and device. OTP valid for 5 minutes, max 5 tries. Short-lived access JWT (15 minutes) plus rotating refresh token in an httpOnly cookie, with reuse detection. |
-| Admin | Separate IdP with SSO and mandatory MFA. RBAC roles: `rule_editor`, `rule_approver`, `support`, `dpo`. Four-eyes rule publishing. All actions go to `audit_log`. |
-| Data at rest | RDS and S3 encryption with KMS. Envelope encryption for PII columns. Separate KMS keys per environment. |
-| Data in transit | TLS 1.2 or higher everywhere, HSTS, no plaintext internal hops. |
-| Secrets | AWS Secrets Manager. Nothing in env files committed to git. gitleaks runs in CI. |
-| Application | OWASP ASVS Level 2 as the target. Zod validation on every input. Strict CSP on web. Rate limiting via Redis. |
-| AI-specific | Prompt injection defences: T&C content and user text are treated as data, tools are read-only and scoped to the user from the session, outputs are number-guarded, and there's no tool that writes. |
-| Logging | Pino with redaction paths for PII. Request IDs. OpenTelemetry traces. No PII in traces. |
-| Supply chain | Renovate, pnpm lockfile, `pnpm audit` and OSV scan, CodeQL, SBOM on each image, pinned base images. |
-| Infra | Private subnets for DB and Redis, least-privilege IAM per service, WAF in front of the load balancer. |
-| Assurance | Threat model (STRIDE) before Phase 5. External penetration test before public launch. |
+| Consumer auth | Passkeys (WebAuthn) as the only everyday login. Phone OTP only at sign-up and as one recovery factor, rate-limited per phone, IP and device. Recovery needs a phone OTP **plus** a second factor (email link or a cooling-off period), so SIM swap alone isn't enough. |
+| Sessions | 15-minute access token and a rotating refresh token bound to the device key. Refresh token reuse revokes the whole session family. |
+| Risk and step-up | A risk score per refresh. Step-up with a fresh passkey check for sensitive actions, valid for 5 minutes. |
+| Mobile hardening | Certificate pinning, App Attest and Play Integrity attestation checked on the server, root and jailbreak detection (warn, and block sensitive actions), and `FLAG_SECURE` or iOS screenshot masking on sensitive screens. All of these need an Expo **development build**, not Expo Go. |
+| Mobile storage | Tokens in the iOS Keychain or Android Keystore (`expo-secure-store`). Offline wallet cache in encrypted storage, cleared on logout. |
+| Web | httpOnly, SameSite=strict cookies, strict CSP, HSTS. WCAG 2.1 AA also covers secure, accessible auth flows. |
+| Admin | SSO with MFA, roles `analyst`, `reviewer` and `admin`, four-eyes publishing, every action in `audit_log`. |
+| Data | RDS and S3 encrypted with KMS, envelope encryption for PII columns, and separate keys per environment. |
+| Secrets | AWS Secrets Manager. Only `.env.example` files are committed. gitleaks runs in CI. |
+| AI | Read-only tools scoped to the session user, number guard, redaction, and document worker output limited to drafts. |
+| Supply chain | Renovate, lockfiles (pnpm, uv), CodeQL, OSV scan, SBOM per image. |
+| Assurance | OWASP ASVS Level 2 review and fixes in Phase 10, a STRIDE threat model in Phase 3, and an external pen test before public launch. |
 
 ---
 
 ## 6. Testing strategy and CI pipeline
 
-### 6.1 Test pyramid
+### 6.1 Test layers
 
-| Layer | Tool | What it covers | Target |
+| Layer | Tool | Scope | Gate |
 |---|---|---|---|
-| Unit | Vitest | Pure logic, especially `rules-engine` and `rule-schemas` | Engine at 95% or more line and branch coverage |
-| Property-based | fast-check | Engine invariants: rewards never go above a cap, a spend that's excluded earns 0, ranking never depends on input order, money stays an integer number of paise | Runs with unit tests |
-| Golden card fixtures | Vitest plus JSON fixtures | Per card: hand-checked scenarios taken from the bank T&C, with expected values | Every published card has at least 10 scenarios |
-| Integration | Vitest plus Testcontainers (Postgres, Redis) | Repositories, migrations, the exclusion constraint, consent guard, outbox to alert flow | All modules |
-| API contract | OpenAPI generated from Nest, checked with Schemathesis | Response shapes and error codes | All public routes |
-| End to end | Playwright | Onboarding with consent, add card, ask question, withdraw consent, data export | Critical journeys |
-| AI evals | Custom runner in `evals/` | Intent extraction accuracy, number-guard pass rate, refusal correctness, answer quality via an LLM judge with a rubric | Gates on prompt or model change |
-| Load | k6 | Questions and best-card endpoints, worker fan-out for 100k users | Before launch |
+| Engine unit tests | Vitest, table-driven | All 5 (or 6) engine functions | **95% or more** line and branch coverage (Phase 2) |
+| Engine properties | fast-check | Rewards never exceed caps, excluded spend earns 0, ranking doesn't depend on input order, money stays a whole number of paise | Runs with unit tests |
+| API integration | Vitest + Testcontainers (Postgres, Redis) | **Every endpoint** (Phase 3): happy path, validation errors, auth, step-up, consent denied, rate limit | Required |
+| Contract | OpenAPI spec diff, typed client compile | Breaking API changes are caught before mobile and web break | Required |
+| Mobile E2E | Maestro | Onboarding and wallet flows (Phase 4) | Required on mobile changes |
+| Web E2E | Playwright + axe | Onboarding, wallet, trip mode (Phase 5), plus WCAG checks | Required on web changes |
+| Workers | Vitest (alerts), pytest (docs) | Idempotency, retries, quiet hours, robots.txt, diff, draft-only permission | Required |
+| AI evals | `evals/` runner | 100 golden questions (Phase 8): right tool and arguments, no figures outside the tool results, refuses when no rule exists, sources present | **Fails below the configured accuracy threshold** |
+| Load | k6 | Wallet and recommendation endpoints | p95 under 300 ms (Phase 10) |
 
-**AI eval gates (initial targets, to be tuned):**
+**How AI evals run in CI.** They make real LLM calls, which cost money, can give slightly different results each run, and need an API key in CI. My proposal:
 
-- Intent and slot accuracy of at least 95% on the golden set
-- Number-guard failure rate below 1%
-- 100% correct refusals on the out-of-scope set
-- No regression of more than 2 points on judge score versus the main branch
+- Run them on PRs that touch `apps/api/src/ai`, `evals/` or `packages/rules-engine`, on `main`, and nightly.
+- Keep provider keys only in a protected GitHub environment, so PRs from forks can't run them.
+- Since you'll have both, run them against each provider nightly.
 
 ### 6.2 CI pipeline (GitHub Actions)
 
 ```mermaid
 flowchart LR
-    pr[Pull request] --> setup[Install<br/>pnpm cache, Turbo cache]
-    setup --> static[Lint, format, typecheck]
-    setup --> unit[Unit, property, golden tests]
-    setup --> integ[Integration tests<br/>Postgres and Redis service containers]
-    setup --> mig[Migration check<br/>schema matches migrations,<br/>apply on fresh DB]
-    setup --> sec[CodeQL, gitleaks,<br/>OSV dependency scan]
-    setup --> aismoke[AI eval smoke<br/>only if packages/ai or evals changed]
-    static & unit & integ & mig & sec & aismoke --> build[Build Docker images]
-    build --> gate{All green}
+    pr[Pull request] --> setup[Install<br/>pnpm and uv caches,<br/>Turbo remote cache]
+    setup --> lint[Lint and format<br/>ESLint, Prettier, ruff]
+    setup --> types[Typecheck<br/>tsc strict, mypy]
+    setup --> test[Unit and integration<br/>Vitest, pytest,<br/>Testcontainers]
+    setup --> mig[Migration check]
+    setup --> sec[CodeQL, gitleaks, OSV]
+    setup --> evals[AI evals<br/>only if AI paths changed]
+    setup --> e2e[Maestro or Playwright<br/>only if app changed]
+    lint & types & test & mig & sec & evals & e2e --> build[Build all apps<br/>and images]
 
-    main[Merge to main] --> push[Push images, SBOM]
-    push --> stg[Deploy to staging<br/>run migrations]
-    stg --> e2e[Playwright e2e on staging]
-    e2e --> approve{Manual approval}
-    approve --> prod[Deploy to production]
+    main[Merge to main] --> img[Push images, SBOM]
+    img --> stg[Deploy staging<br/>from Phase 10]
+    stg --> smoke[Smoke and E2E]
+    smoke --> ok{Manual approval}
+    ok --> prod[Production]
 
-    nightly[Nightly] --> fulleval[Full AI eval suite]
-    nightly --> deps[Renovate, OSV]
+    nightly[Nightly] --> full[Full evals on both providers,<br/>dependency scan]
 ```
 
-**Pipeline rules**
-
-- Turbo affected-only runs keep PR checks fast. The target is under 8 minutes.
-- Branch protection on `main`: required checks, 1 review, no direct pushes.
-- Migrations run as a separate pre-deploy step and must be backward compatible (expand, then contract) so a rollback never breaks the schema.
-- Engine coverage below threshold fails the build. Overall coverage is reported but not gated.
+- Phase 1 delivers the core of this pipeline: install, lint, typecheck, test and build. Each later phase adds its own jobs.
+- Turbo only runs what a PR changed. The target is under 10 minutes.
+- Migrations are expand-then-contract, so a rollback never breaks the schema.
 
 ---
 
-## 7. Phased delivery plan
+## 7. Phased delivery plan (matches BUILD_PROMPTS.md)
 
-`BUILD_PROMPTS.md` doesn't exist yet. The phases below are my proposal. Once you approve them, I'll turn each one into a prompt in a new `BUILD_PROMPTS.md`.
-
-| Phase | Name | Scope | Exit criteria |
+| Phase | Name | Main deliverables | Exit criteria |
 |---|---|---|---|
-| 0 | Foundations | This doc and its answers. `CLAUDE.md` with conventions. Monorepo scaffold, CI skeleton, ADRs for the decisions above. | CI green on an empty scaffold. Open questions answered. |
-| 1 | Identity and consent | Auth (phone OTP, sessions), `users`, `notices`, `consents`, consent guard, `audit_log`, PII encryption helpers | Onboarding with notice and consent works end to end. Withdrawal blocks guarded routes. Integration tests pass. |
-| 2 | Card catalog and rule authoring | `issuers`, `cards`, `benefit_rules` with versioning and exclusion constraint, Zod rule schemas, admin console with four-eyes publish, T&C snapshots, outbox | 10 to 20 popular cards seeded and published with sources. Overlap constraint proven by tests. |
-| 3 | Rules engine and wallet | `rules-engine` package, `user_cards`, "best card for this spend" API, `evaluations` with trace, basic web UI | Golden fixtures pass for every seeded card. Property tests pass. A user can add cards and get a ranked answer with a "why". |
-| 4 | AI question layer | AI orchestrator, redaction, tools, number guard, `questions`, eval harness and golden sets | Eval gates in 6.1 met. LLM outage falls back cleanly. |
-| 5 | Alerts worker | Worker app, schedulers, fan-out, delivery with consent check, quiet hours, DLQ, in-app alert inbox | Rule publish creates the correct alerts exactly once. Withdrawn channel consent suppresses delivery. |
-| 6 | Trips | `trips`, trip evaluations (forex, lounges, insurance), `trip_prep` alerts | A trip shows the best card abroad and eligible lounges. Pre-trip alert fires on schedule. |
-| 7 | Data rights and hardening | Export, erasure, retention purge, grievance flow, threat model, pen test, load test, observability dashboards, runbooks | DPDP checklist signed off by counsel. Pen test high findings fixed. Load targets met. |
-| 8 | Beta launch | Staged rollout, feedback loop, rule update operations | Agreed beta metrics (to define, Q10). |
+| 0 | Plan | This document, answers to section 8, `CLAUDE.md` | Open questions answered. Doc approved and merged. |
+| 1 | Monorepo foundation | pnpm and Turbo, `apps/*`, `workers/*`, `packages/*` (plus `packages/db`), Docker Compose, lint, format and TS strict, CI, `.env.example`, README setup, `docs/PROGRESS.md` | One command starts every app, and each shows a health check. CI green. |
+| 2 | Rules engine and data model | `packages/rules-engine` (5 functions), Drizzle schema for section 3, rule status flow, demo seed only | Engine coverage at 95% or more, table-driven tests, exclusion constraint tested, no real bank data in the seed |
+| 3 | API | Passkeys, phone verification with a mock SMS provider, device binding, risk scoring, step-up, all endpoint groups, zod, rate limits, audit log, OpenAPI, typed client in `packages/shared` | Integration test for every endpoint. Threat model written. |
+| 4 | Mobile app | All listed screens, security hardening, design tokens, light and dark, "Verified on" plus source, Expo push, offline wallet, Maestro, EAS config | Maestro onboarding and wallet flows pass on iOS and Android dev builds |
+| 5 | Web app | Same flows as mobile, responsive to 360 px, WCAG 2.1 AA | Playwright onboarding, wallet and trip mode tests pass. No serious axe violations. |
+| 6 | Admin console | Roles, rule editor with required `source_url`, version diff, review queue, publish with audit, impact preview using `compareRuleVersions` | An analyst drafts, a reviewer approves, publish writes the audit log, and impact preview matches engine tests |
+| 7 | Alerts worker | Scheduled and event jobs, idempotency, retries, DLQ, push and email, WhatsApp stub, frequency and quiet hours | Publishing a rule creates correct devaluation alerts exactly once. Quiet hours respected. |
+| 8 | AI copilot | Provider interface, Claude and Gemini adapters, engine-only tools, number guard, refusal, sources, 100-question eval set in CI, consented logging | Eval accuracy at or above threshold on the configured provider. Guard and refusal tests pass. |
+| 9 | Document worker | Python fetch, extract, hash, diff, LLM drafts, draft-only API access | A changed demo T&C page produces a draft in the review queue. Publishing from the worker token is rejected. |
+| 10 | Production hardening | Terraform (India region), OTel, Sentry, dashboards, ASVS L2 fixes, k6, `RUNBOOK.md`, `COMPLIANCE.md`, release checklists | p95 under 300 ms, ASVS findings closed, restore tested, compliance checklist reviewed |
+
+After each phase, the review prompt at the end of `BUILD_PROMPTS.md` is run against `CLAUDE.md`. That's why `CLAUDE.md` needs to exist before Phase 1 (Q1).
 
 ---
 
 ## 8. Open questions
 
-| # | Question | Why it matters |
+Each question has my recommended default. Reply "go with defaults" or change any.
+
+| # | Question | Recommended default |
 |---|---|---|
-| Q1 | Do you want me to write `CLAUDE.md` (coding conventions) and `BUILD_PROMPTS.md` (from section 7) once this doc is approved? | These were meant to be the source documents. |
-| Q2 | Who are the first users, and what's the launch target: personal project, closed beta, or public launch? Any rough date? | Sets how much of Phase 7 is needed before anyone uses it. |
-| Q3 | How do we know a user's spend for milestones and caps? Options: (a) user enters it, (b) statement PDF upload, (c) Account Aggregator, (d) not tracked in v1. | Biggest product and compliance choice. (b) and (c) bring in much more sensitive data. |
-| Q4 | Which cards and how many at launch? Who maintains rules when banks change T&C, and how quickly? | Rule freshness is the product. |
-| Q5 | Web only first, or mobile at launch? Which notification channels: email, push, WhatsApp, SMS? | Affects Phases 1 and 5, plus provider contracts. |
-| Q6 | LLM provider: is Claude fine as the default? Any budget limit per user per month? | Cost model and DPA. |
-| Q7 | Is "which new card should I apply for" in scope? Any affiliate or referral revenue planned? | If yes, it creates conflict-of-interest and disclosure duties. It also changes the scope guard. |
-| Q8 | Is it acceptable for redacted question text to be processed by an LLM hosted outside India? | DPDP cross-border transfer and user trust. |
-| Q9 | Retention periods: inactive accounts, questions, evaluations? | Needed for the purge job and the notice. |
-| Q10 | What does success look like for beta (users, questions per week, answer accuracy)? | Defines Phase 8 exit and what we instrument. |
-| Q11 | Any preference to change: AWS vs GCP, NestJS vs plain Fastify, Drizzle vs Prisma? | Cheap to change now, expensive after Phase 1. |
-| Q12 | Do you have a privacy lawyer or DPO lined up? | Required sign-off before public launch. |
+| Q1 | `CLAUDE.md` is missing, and the review prompt checks against its "non-negotiable rules (AI, data, security)". Do you have the original text? | If not, I write it from `BUILD_PROMPTS.md` and this doc, for your approval, before Phase 1. |
+| Q2 | Who is it for first, and when? | Closed beta with about 50 invited users. No date pressure. |
+| Q3 | Deadlines, points expiry, the upgrade advisor and annual review need spend and points data. Where does it come from? | The user enters estimates: monthly spend by category, and points balance and expiry per card. Statement upload could come after beta. |
+| Q4 | The seed has demo cards only. Who enters real cards, and when? | Real cards are entered through the admin console after Phase 6, starting with 10 to 15 cards. Until then, everything runs on demo cards. |
+| Q5 | Will the upgrade advisor ever earn affiliate or referral money? | Not in v1. Rankings stay neutral. If added later, show a clear disclosure and never change the ranking for money. |
+| Q6 | Passkeys need a real domain (web origin, plus `apple-app-site-association` and `assetlinks.json` for the apps). Do you have one? | Buy one before Phase 3, for example `cardguru.in` if available. |
+| Q7 | EAS builds for real devices, App Attest and Play Integrity need an Apple Developer account (USD 99 a year) and a Google Play account (USD 25 one-time). | Get both before Phase 4. Simulators and emulators work without them until then. |
+| Q8 | Will you run the project on your own computer (needs Docker, Node and Python) or only through Claude Code cloud sessions? | Support both. The README will cover macOS and Windows (WSL). |
+| Q9 | LLM keys and budget: Claude and Gemini keys, a monthly cap, and evals in CI costing money. | Hard monthly cap in each provider console. Evals only on AI-related PRs, `main` and nightly. |
+| Q10 | Is it OK for redacted question text to be processed by LLMs hosted outside India? | Yes, redacted only, with zero-retention settings. |
+| Q11 | How long do we keep data? | Inactive accounts 2 years. Logged questions and evaluations 12 months, then anonymous totals only. T&C snapshots indefinitely (public data). |
+| Q12 | AWS Mumbai or GCP Mumbai? | AWS `ap-south-1`. |
+| Q13 | OK to add `packages/db` to the layout in `BUILD_PROMPTS.md`? | Yes (reasons in 1.2). |
+| Q14 | OK to add a 6th engine function, `estimateAnnualValue`, for the upgrade advisor and annual review? | Yes. Otherwise that maths would sit in the API, outside the tested engine. |
+| Q15 | Privacy counsel? | Not needed for a closed beta. Needed before public launch. |
+| Q16 | What does a good beta look like? | 50 active users, 70% of answers rated helpful, zero wrong amounts reported, alert open rate above 30%. |
 
 ---
 
@@ -664,14 +844,16 @@ flowchart LR
 
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
-| R1 | **Stale or wrong benefit rules.** Banks change T&C often and quietly, so users act on old data. | High | High | Show "last verified" date on every answer. Weekly T&C snapshot diff job flags changes for review. Source link on every answer. Users can report "this is wrong". |
-| R2 | **AI states a wrong number** about money. | Medium | High | Engine is the only source of numbers, plus the number guard, template fallback and eval gates. |
-| R3 | **Milestone and cap features are weak without spend data** (if Q3 is "user enters it"). | High | Medium | Make manual entry quick. Treat estimates as estimates in the UI. Revisit with AA or statement upload after beta. |
-| R4 | **Rule model can't express a real bank rule** (tiered, merchant-specific, time-boxed offers). | Medium | Medium | Model 10 diverse real cards in Phase 2 before freezing schemas. Keep an `escape_hatch` kind with a manual note. Schemas are versioned. |
-| R5 | **DPDP interpretation gaps** (Rules phase-in, cross-border, retention). | Medium | High | Counsel review before launch (Q12). Design is already consent-first and minimal. |
-| R6 | **Liability and trust:** users treat answers as financial advice. | Medium | Medium | Clear disclaimers. Strict scope guard. No card application advice without disclosure (Q7). |
-| R7 | **Card data compliance creep:** a feature later tries to store full PAN or SMS transactions. | Low | High | Written rule in `CLAUDE.md`. Schema has no column for it. CI grep check for PAN-like patterns in fixtures and logs. |
-| R8 | **LLM cost growth** as usage grows. | Medium | Medium | Small model for classification. Engine-only answers for structured intents. Per-user rate limits. Prompt caching. |
-| R9 | **Alert fatigue** leads to users turning everything off. | Medium | Medium | Frequency caps, quiet hours, per-type toggles, track open and disable rates. |
-| R10 | **Small team, broad scope.** Phases slip. | High | Medium | Strict phase exit criteria. Trips and WhatsApp can move after beta. |
-| R11 | **Assumptions in section 0 are wrong**, because this doc was written without `CLAUDE.md` or `BUILD_PROMPTS.md`. | Medium | High | Answer section 8 before Phase 1. Update this doc and record ADRs. |
+| R1 | **Scope is large**: 3 apps, 2 workers, 2 languages and advanced mobile security, for a small team | High | High | Strict phase exit criteria and the review prompt after each phase. Mobile security extras (pinning, root detection) could move to Phase 10 if Phase 4 runs long. |
+| R2 | **Stale or wrong rules** once real cards are added | High | High | "Verified on" on everything, the document worker flags changes, four-eyes publishing, and a "report this" button |
+| R3 | **AI states a wrong amount** | Medium | High | Engine-only tools, number guard, template fallback, refusal when no rule exists, CI eval gate |
+| R4 | **Features need data we don't collect** (deadlines, upgrade advisor) | High | Medium | User-entered estimates (Q3), labelled as estimates in the UI |
+| R5 | **Passkey recovery is weak or lets attackers in.** Phone OTP alone can be beaten by SIM swap. | Medium | High | Recovery needs OTP plus a second factor or a cooling-off period. Recovery events go into the risk score. |
+| R6 | **Indian SMS rules (DLT)** delay real OTP delivery | Medium | Medium | Mock provider through Phase 9, and start DLT registration with the chosen SMS provider early |
+| R7 | **Mobile security features don't work in Expo Go** and need native config | High | Low | Use Expo development builds from the start of Phase 4 |
+| R8 | **Scraping legality and robustness**: bank site terms, layout changes, PDFs that are scanned images | Medium | Medium | Respect robots.txt, rate limits and a clear user agent. Check each site's terms before adding it. Alert when extraction fails, and send image-only PDFs for manual review. |
+| R9 | **AI eval cost and flakiness in CI** | Medium | Medium | Run only when AI paths change, fixed temperature, a threshold rather than exact matching, budget cap |
+| R10 | **Two LLM providers** double the tuning, eval and DPA work | Medium | Low | One primary provider for beta, with the second kept working through nightly evals |
+| R11 | **DPDP interpretation gaps** | Medium | High | Consent-first, minimal design, and counsel before public launch (Q15) |
+| R12 | **Users treat answers as financial advice**, especially from the upgrade advisor | Medium | Medium | Clear disclaimers, neutral rankings, disclosure if any money is involved (Q5) |
+| R13 | **No `CLAUDE.md`**, so the per-phase review has nothing to check against | High | Medium | Write it before Phase 1 (Q1) |
